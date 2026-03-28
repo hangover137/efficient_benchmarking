@@ -7,6 +7,43 @@ def get_ranks_s(selected_datasets,
                 model_indx=np.arange(35),
                 return_ranks=False,
                 fold_num=30):
+
+    """
+    Build fold-wise benchmark ranks from raw score tables and optionally aggregate
+    them over a selected dataset subset.
+    
+    This function is used in two places in the notebook:
+    
+    1. to precompute per-dataset rank tables from raw benchmark scores;
+    2. to obtain the mean model ranks induced by a chosen subset of datasets.
+    
+    Parameters
+    ----------
+    selected_datasets : sequence of str
+        Dataset identifiers to aggregate over when ``return_ranks`` is ``False``.
+    scores : dict
+        Mapping ``model_name -> DataFrame`` with one row per dataset and fold
+        columns named ``'0'`` ... ``str(fold_num - 1)``.
+    all_datasets : sequence of str
+        Full ordered list of datasets that should appear in the output tables.
+    model_indx : array-like, default=np.arange(35)
+        Indices of models to include from ``scores``.
+    return_ranks : bool, default=False
+        If ``True``, return the complete dictionary of fold-wise rank tables instead
+        of aggregating over ``selected_datasets``.
+    fold_num : int, default=30
+        Number of cross-validation folds stored in each score table.
+    
+    Returns
+    -------
+    dict or ndarray
+        If ``return_ranks`` is ``True``, returns a dictionary
+        ``dataset_name -> DataFrame`` where each fold column contains ranks rather
+        than raw scores.
+        Otherwise returns a NumPy array with the mean rank of every model across
+        the selected datasets and folds.
+    
+    """
     
     model_indx = np.sort(model_indx)
     

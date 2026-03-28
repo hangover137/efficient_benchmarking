@@ -39,6 +39,35 @@ from utils.get_metrics import get_metrics
 
 
 def _save_summary_ci_csv(metrics: list, out_csv: str):
+    
+    """
+    Write aggregated metrics with confidence intervals to a flat CSV file.
+    
+    This helper converts the in-memory output produced by ``eval_method_mean`` /
+    ``average_metr(_transp)`` into a tabular representation that is easier to
+    inspect from a notebook or reload in downstream analysis. For every subset
+    size and every metric, it stores the mean estimate together with the empirical
+    2.5% and 97.5% quantiles.
+    
+    Parameters
+    ----------
+    metrics : list of dict
+        Sequence of metric dictionaries, one item per subset size. Each item is
+        expected to contain a ``"sizes"`` key and metric entries of the form
+        ``{"mean": ..., "q2.5": ..., "q97.5": ...}``.
+    out_csv : str
+        Destination path for the CSV file.
+    
+    Returns
+    -------
+    None
+        The function writes the CSV file to ``out_csv``.
+    
+    Notes
+    -----
+    Keys named ``"sizes"``, ``"label"`` and ``"repr"`` are treated as metadata and
+    are skipped during export.
+    """
 
     sizes = metrics[0]["sizes"]
     rows = []
@@ -59,6 +88,31 @@ def _save_summary_ci_csv(metrics: list, out_csv: str):
 
 
 def _save_raw_csv(raw_by_size: list, sizes, out_csv: str):
+    
+    """
+    Write per-iteration metric values to a long-format CSV file.
+    
+    The testing pipeline keeps raw metric values for every repetition and subset
+    size so that statistical tests can be run later without recomputing the whole
+    benchmark. This helper serializes that structure to a tidy table with columns
+    ``size``, ``metric``, ``iter`` and ``value``.
+    
+    Parameters
+    ----------
+    raw_by_size : list of dict
+        List indexed by subset size. Each element is a dictionary mapping metric
+        names to a list of values collected over repetitions.
+    sizes : sequence of int
+        Subset sizes corresponding to ``raw_by_size``.
+    out_csv : str
+        Destination path for the CSV file.
+    
+    Returns
+    -------
+    None
+        The function writes the CSV file to ``out_csv``.
+    """
+    
     rows = []
     for j, k in enumerate(sizes):
         raw_j = raw_by_size[j]
@@ -74,6 +128,28 @@ def _save_raw_csv(raw_by_size: list, sizes, out_csv: str):
 
 
 def _load_raw_csv_to_structure(csv_path: str, sizes):
+    
+    """
+    Load raw per-iteration metrics from _save_raw_csv format.
+    
+    Parameters
+    ----------
+    csv_path : str
+        Path to a CSV file previously produced by ``_save_raw_csv``.
+    sizes : sequence of int
+        Subset sizes to reconstruct, in the required output order.
+    
+    Returns
+    -------
+    list of dict
+        A list aligned with ``sizes``. Each item is a dictionary
+        ``metric_name -> list[float]`` containing values sorted by iteration index.
+    
+    See Also
+    --------
+    _save_raw_csv
+    """
+    
     df = pd.read_csv(csv_path)
     raw_by_size = []
     for k in sizes:
@@ -100,7 +176,80 @@ def average_metr(fn,
                  models_bench=False,
                  num_models=35,
                  return_raw=False):
+
+    """
+    Evaluate one subset-selection method for a fixed subset size and aggregate
+    ranking-preservation metrics across repeated trials.
     
+    This is the core worker used by ``testing_pipeline`` in the standard
+    (non-``transp``) regime where the selection method is called separately for
+    each candidate subset size. In every repetition it optionally replaces the
+    input representation with auxiliary data (Lasso-selected features, surrogate
+    model objects, or precomputed rank matrices), runs the selection method,
+    converts the selected indices back to dataset names when needed, computes the
+    resulting model ranking, and compares it with the reference ranking via
+    ``get_metrics``.
+    
+    Parameters
+    ----------
+    fn : callable
+        Dataset-selection function. It must accept the current representation
+        matrix, the requested subset size and a ``model_list`` keyword argument,
+        and it must return the selected indices relative to the provided
+        ``iter_data``.
+    args : dict
+        Additional keyword arguments forwarded to ``fn``.
+    data : array-like
+        Base representation used by the selection method. In the dataset-benchmark
+        scenario rows correspond to datasets. In the model-benchmark scenario rows
+        stay fixed and the model subset is communicated through ``model_list``.
+    indexes_list : sequence of array-like
+        Indices defining the repeated train/evaluation splits used by the paper's
+        protocol.
+    sample_size : int
+        Number of datasets to select in the current run.
+    test_ind : sequence
+        Reference pool used to compute the target ranking. It can contain integer
+        indices into ``datasets`` or dataset identifiers directly.
+    datasets : array-like
+        Dataset identifiers. After selection, these identifiers are passed to
+        ``get_ranks``.
+    ranks : dict
+        Precomputed rank tables keyed by dataset name.
+    add_data : list
+        Auxiliary inputs with positional meaning:
+        ``add_data[0]`` = Lasso-transformed representations,
+        ``add_data[1]`` = surrogate-model payload returned by
+        ``get_entrohpy_data``,
+        ``add_data[2]`` = rank-based representations.
+        If more than one entry is non-empty, later entries override earlier ones.
+    models_bench_data : list
+        Auxiliary rank data for the model-benchmark regime. By construction
+        ``models_bench_data[0]`` contains rank tables for sampled model subsets.
+    iter : int, default=50
+        Number of repeated trials.
+    models_bench : bool, default=False
+        Switch between the dataset-benchmark regime and the model-benchmark regime.
+    num_models : int, default=35
+        Number of models in the full benchmark.
+    return_raw : bool, default=False
+        If ``True``, return both aggregated statistics and per-iteration metric
+        values.
+    
+    Returns
+    -------
+    dict or tuple
+        If ``return_raw`` is ``False``, returns a dictionary
+        ``metric_name -> {'mean', 'q2.5', 'q97.5'}``.
+        Otherwise returns ``(summary, raw_values)`` where ``raw_values`` stores the
+        per-iteration values for each metric.
+    
+    Notes
+    -----
+    This function assumes that smaller average rank means a better model, matching
+    the rank-preservation objective used in the paper.
+    """
+
     iter_vals = {}
     
     for i in range(iter):
@@ -184,6 +333,34 @@ def average_metr_transp(fn,
                         models_bench=False,
                         num_models=35,
                         return_raw=False):
+    
+    """
+    Vectorized counterpart of ``average_metr`` for methods that return selections
+    for multiple subset sizes in a single call.
+    
+    Some selection algorithms in the notebook are implemented in a transparent /
+    trajectory mode: given a list of sizes, the method returns one subset per size.
+    This helper evaluates such methods more efficiently by calling the selector
+    once per repetition and then scoring every returned subset against the same
+    reference ranking.
+    
+    Parameters
+    ----------
+    fn, args, data, indexes_list, test_ind, datasets, ranks, add_data, models_bench_data, iter, models_bench, num_models, return_raw
+        Same meaning as in ``average_metr``.
+    sizes : sequence of int
+        Ordered subset sizes for which the selector should return one subset each.
+    label : str
+        Progress-bar label shown in notebooks.
+    
+    Returns
+    -------
+    list of dict or tuple
+        If ``return_raw`` is ``False``, returns a list of aggregated metric
+        dictionaries, one per size in ``sizes``.
+        Otherwise returns ``(metrics, iter_vals_list)`` where ``iter_vals_list``
+        stores raw per-iteration values for each size.
+    """
     
     iter_vals_list = [{} for _ in range(len(sizes))]
     
@@ -281,6 +458,41 @@ def eval_method_mean(fn,
                      models_bench_data,
                      return_raw=False):
 
+    """
+    Dispatch metric evaluation for one method across all requested subset sizes.
+    
+    The pipeline supports two selector interfaces:
+    
+    1. standard methods, called separately for each ``k``;
+    2. ``transp`` methods, which emit a full selection trajectory for all ``sizes``
+       in a single call.
+    
+    This wrapper chooses the appropriate evaluation path and ensures that the
+    result is returned in the common format expected by ``plot_results`` and the
+    checkpointing utilities.
+    
+    Parameters
+    ----------
+    fn : callable
+        Dataset-selection function.
+    args : dict
+        Extra keyword arguments forwarded to ``fn``.
+    transp : bool
+        Whether ``fn`` supports the trajectory-style interface described above.
+    test_iter : int
+        Number of repetitions.
+    data, indexes_list, sizes, datasets, ranks, test_ind, label, add_data, models_bench, num_models, models_bench_data
+        Passed through to ``average_metr`` or ``average_metr_transp``.
+    return_raw : bool, default=False
+        If ``True``, also return raw per-iteration metric values.
+    
+    Returns
+    -------
+    list or tuple
+        Aggregated metrics for all sizes. If ``return_raw`` is ``True``, raw values
+        are returned alongside the summaries.
+    """
+
     metrics = []
     raw_list = []
 
@@ -343,6 +555,74 @@ def get_entrohpy_data(data,
                       recsys_bench,
                       num_models,
                       models_bench):
+    
+    """
+    Train or load surrogate GP models used as an alternative dataset
+    representation.
+    
+    Despite the function name, this helper does not compute entropy directly.
+    Instead it builds, for every repetition, a list of Gaussian-process surrogate
+    models that predict benchmark-model performance from dataset features. In the
+    notebook workflow these surrogate objects can be passed to selection methods as
+    a richer representation than the original feature matrix.
+    
+    Parameters
+    ----------
+    data : ndarray
+        Input matrix whose last ``num_models`` columns are interpreted as benchmark
+        targets and whose preceding columns are dataset-level features.
+    load_models : bool
+        If ``True``, reuse cached surrogate models from ``save_models_path`` when
+        available.
+    save_models : bool
+        If ``True``, save models to the stable checkpoint directory. Otherwise save
+        them to the history directory with a timestamp.
+    save_models_path : str
+        Directory containing reusable checkpoints.
+    models_prefix : str
+        Prefix controlling both file names and preprocessing mode. Substrings in
+        the prefix trigger different behaviours:
+        ``'PCA'`` enables PCA preprocessing,
+        ``'30'`` selects 30 principal components,
+        ``'099'`` keeps components explaining 99% of variance,
+        ``'info'`` applies mutual-information feature filtering,
+        ``'simple'`` uses ``ExactGPModel`` + ``train_model`` instead of
+        ``automated_model_training``.
+    test_iter : int
+        Number of repetitions.
+    train_inxs_list : sequence of array-like
+        Split definitions for each repetition.
+    label : str
+        Human-readable method label shown in notebook progress bars.
+    save_models_hist_path : str
+        Directory used for timestamped history dumps when ``save_models`` is
+        ``False``.
+    time_save : str
+        Timestamp suffix used in history filenames.
+    random_state : int
+        Random seed forwarded to feature selection and model-training helpers.
+    recsys_bench : bool
+        Present for API compatibility with the notebook. It is not used inside the
+        current implementation.
+    num_models : int
+        Number of benchmark models encoded in the target block of ``data``.
+    models_bench : bool
+        Switch to model-benchmark mode. In this regime dataset rows stay fixed and
+        the sampled model indices are applied to the target block instead.
+    
+    Returns
+    -------
+    list
+        One entry per repetition. Each entry is a list of
+        ``[model, likelihood, transformed_train_x]`` triples, one per benchmark
+        target model.
+    
+    Notes
+    -----
+    The returned objects are consumed indirectly through ``add_data[1]`` inside
+    ``average_metr`` / ``average_metr_transp``. Their exact interpretation depends
+    on the downstream selector implementation used in the notebook.
+    """
     
     entr_data = []
     
@@ -502,6 +782,27 @@ def get_ranks_data(train_inxs_list,
                    datasets,
                    ranks_list):
     
+    """
+    Convert cached rank tables into dense matrix representations.
+    
+    Parameters
+    ----------
+    train_inxs_list : sequence
+        Repetition definitions. Only the number of repetitions is used here.
+    datasets : sequence of str
+        Dataset identifiers whose order defines the rows of the output matrices.
+    ranks_list : list of dict
+        Output of ``get_models_base`` / ``get_ranks_s(return_ranks=True)`` for each
+        repetition.
+    
+    Returns
+    -------
+    list of ndarray
+        One matrix per repetition. Rows correspond to datasets, columns correspond
+        to benchmark models, and each entry is the mean rank across folds for that
+        dataset/model pair.
+    """
+    
     ranks_data = []
         
     for i in range(len(train_inxs_list)):
@@ -565,7 +866,122 @@ def testing_pipeline(datasets,
                      stats_alpha=0.05,
                      stats_save_dir=None
                      ):
+
+    """
+    Run the end-to-end benchmark-reduction experiment across multiple selection
+    methods.
     
+    This is the main entry point used by the notebook. It implements the protocol
+    described in the paper:
+    
+    1. sample repeated train/evaluation splits over datasets (or over models when
+       ``models_bench=True``);
+    2. optionally build auxiliary representations such as Lasso-selected features
+       or surrogate GP models;
+    3. evaluate each subset-selection method across candidate subset sizes;
+    4. save raw and aggregated results to checkpoints/history folders;
+    5. generate summary plots and optionally expose raw results for statistical
+       tests.
+    
+    Parameters
+    ----------
+    datasets : array-like
+        Dataset identifiers used by ``get_ranks`` / ``get_ranks_s``. In the typical
+        notebook workflow this is the ordered list of benchmark dataset names.
+    metods_data_list : list of tuple
+        Specification of all methods to evaluate. Each tuple must have the form::
+    
+            (method, data, sizes, need_l, need_m, args, transp, models_in_data, label)
+    
+        where
+    
+        - ``method`` is the selector callable;
+        - ``data`` is the base representation passed to the selector;
+        - ``sizes`` is the list of subset sizes to evaluate;
+        - ``need_l`` requests ``get_lasso_data`` preprocessing;
+        - ``need_m`` requests surrogate-model preprocessing via
+          ``get_entrohpy_data``;
+        - ``args`` is a dict of extra selector arguments;
+        - ``transp`` indicates that the selector returns a trajectory for all sizes
+          in one call;
+        - ``models_in_data`` indicates that ``data`` already encodes model-level
+          information and should be replaced by ``get_ranks_data`` in the
+          model-benchmark regime;
+        - ``label`` is the human-readable method name used in plots and filenames.
+    ranks : dict
+        Precomputed rank tables keyed by dataset name.
+    scores : dict
+        Raw benchmark score tables keyed by model name.
+    all_datasets : sequence of str
+        Full ordered list of datasets expected by ``get_ranks_s``.
+    ratio : float, default=0.5
+        Fraction of datasets (or models in model-benchmark mode) retained in each
+        repetition.
+    num_models : int, default=35
+        Number of benchmark models in the full experiment.
+    test_iter : int, default=50
+        Number of repeated trials.
+    save_plot_path, save_res_path, save_check_path, save_history_path, save_models_path, save_models_hist_path : str
+        Output directories for plots, checkpoints, history and surrogate-model
+        caches.
+    models_prefix : str, default='info_'
+        Prefix forwarded to ``get_entrohpy_data`` to control model caching and
+        preprocessing mode.
+    random_state : int, default=42
+        Random seed controlling repeated sampling.
+    load_res : bool, default=True
+        Reuse saved per-method results when the corresponding checkpoint already
+        exists.
+    save_models, load_models : bool, default=True
+        Cache or reload surrogate-model objects.
+    save_checpoints : bool, default=True
+        Save stable checkpoints under ``save_check_path``. When ``False``, results
+        are written to the history directory instead.
+    save_results : bool, default=False
+        If ``True``, create a timestamped run directory and save publication-style
+        outputs there.
+    test_datasets : sequence, optional
+        Custom reference pool used when computing the target ranking. When omitted,
+        the full dataset list is used.
+    save_ranks, load_ranks : bool, default=True
+        Cache or reload model-benchmark rank tables.
+    recsys_bench : bool, default=False
+        API flag kept for notebook compatibility. It is only forwarded to
+        ``get_entrohpy_data``.
+    models_bench : bool, default=False
+        Switch from resampling datasets to resampling benchmark models.
+    run_stats_tests : bool, default=True
+        Controls whether raw results are reloaded when checkpoints already exist.
+        The actual calls to ``run_friedman_holm_over_sizes`` are currently commented
+        out in this file.
+    stats_metrics : tuple of str, default=('MAE', 'Spearman')
+        Names of metrics intended for post-hoc statistical testing.
+    stats_alpha : float, default=0.05
+        Significance level for the statistical tests.
+    stats_save_dir : str, optional
+        Directory where Friedman/Holm tables would be saved.
+    
+    Returns
+    -------
+    None
+        The function writes checkpoints/plots to disk and prints AUC summaries via
+        ``plot_results``.
+    
+    Outputs written per method
+    --------------------------
+    Each method directory contains:
+    
+    - ``metrics.pkl``: aggregated metric curves;
+    - ``raw_results.csv``: per-iteration raw values;
+    - ``summary_ci.csv``: mean and 95% empirical interval per metric/size;
+    - ``meta.json``: run configuration for that method.
+    
+    Notes
+    -----
+    The calls to ``run_friedman_holm_over_sizes`` are present but commented out in
+    the current implementation, so no statistical test files are produced unless
+    that code is re-enabled manually.
+    """
     
     np.random.seed(random_state)
     

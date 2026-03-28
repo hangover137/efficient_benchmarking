@@ -19,6 +19,33 @@ from sklearn.metrics import (
 )
 
 def ndcg_from_mean_ranks_1(true_ranks, pred_ranks, k=5, higher_is_better_ranks=True):
+    
+    """
+    Compute NDCG from two vectors that encode benchmark positions.
+    
+    Parameters
+    ----------
+    true_ranks : array-like
+        Reference values used to derive item relevance.
+    pred_ranks : array-like
+        Predicted values used as ranking scores.
+    k : int, default=5
+        Cutoff rank passed to ``sklearn.metrics.ndcg_score``.
+    higher_is_better_ranks : bool, default=True
+        Interpretation of the input arrays. When ``True``, larger values are treated
+        as more relevant / better. When working with mean ranks where ``1`` is best,
+        pass ``False`` to invert the scale before computing NDCG.
+    
+    Returns
+    -------
+    float
+        NDCG@``k`` between the reference and predicted orderings.
+    
+    Notes
+    -----
+    The function reshapes the inputs to a single-query format expected by
+    ``ndcg_score`` and replaces ``NaN`` values with the minimum observed score.
+    """
 
     true_ranks = np.asarray(true_ranks, dtype=float)
     pred_ranks = np.asarray(pred_ranks, dtype=float)
@@ -46,6 +73,39 @@ def ndcg_from_mean_ranks_1(true_ranks, pred_ranks, k=5, higher_is_better_ranks=T
 def get_metrics(true_ranks,
                 pred_ranks,
                 return_simple_metrics=True):
+
+    """
+    Compute agreement metrics between a reference model ranking and an approximate
+    ranking induced by a selected dataset subset.
+    
+    In the notebook workflow this function is the final scoring step after a
+    subset-selection method chooses datasets and ``get_ranks`` turns that choice
+    into mean model ranks. By default it returns the compact set of metrics used in
+    the paper: MAE, Spearman, NDCG@3, NDCG@5 and Kendall.
+    
+    Parameters
+    ----------
+    true_ranks : array-like
+        Reference ranking values, usually the mean ranks obtained from the full
+        benchmark or from the designated test pool.
+    pred_ranks : array-like
+        Approximate ranking values obtained from the selected subset.
+    return_simple_metrics : bool, default=True
+        If ``True``, return only the compact metric set used in the benchmarking
+        pipeline. If ``False``, also compute a larger collection of exploratory
+        association measures.
+    
+    Returns
+    -------
+    dict
+        Dictionary ``metric_name -> float``.
+    
+    Notes
+    -----
+    ``true_ranks`` and ``pred_ranks`` are treated as numeric vectors aligned by
+    model order. The default NDCG calls reuse ``ndcg_from_mean_ranks_1`` with its
+    default interpretation of the input scale.
+    """
 
     x = true_ranks
     y = pred_ranks

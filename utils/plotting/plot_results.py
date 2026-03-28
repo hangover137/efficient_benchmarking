@@ -11,7 +11,50 @@ def plot_results(metr_list,
                  save_res_path,
                  time_save,
                  raw_results=None):
+
+    """
+    Plot metric curves over subset size for all evaluated methods and print AUC
+    summaries.
     
+    This function expects the exact output structure produced by
+    ``testing_pipeline`` / ``eval_method_mean``. For every metric it creates a
+    figure showing the mean curve and the empirical 95% interval for each method.
+    It also prints trapezoidal AUC summaries to stdout, optionally including the
+    standard deviation of per-iteration AUC when raw results are available.
+    
+    Parameters
+    ----------
+    metr_list : list of list of dict
+        One item per method. Each method entry is a list over subset sizes, and
+        each size entry stores ``{'mean', 'q2.5', 'q97.5'}`` for every metric plus
+        a shared ``'sizes'`` field.
+    labels : sequence of str
+        Method labels aligned with ``metr_list``.
+    save_plot_path : str
+        Directory where timestamped figures ``<metric>_all_<time_save>.png`` are
+        written.
+    save_results : bool
+        If ``True``, also save a non-timestamped copy ``<metric>.png`` to
+        ``save_res_path``.
+    save_res_path : str
+        Secondary directory used when ``save_results`` is enabled.
+    time_save : str
+        Timestamp suffix included in the main output filename.
+    raw_results : dict, optional
+        Raw per-iteration results in the format produced by ``testing_pipeline``.
+        When provided, the function estimates the standard deviation of AUC across
+        repetitions and prints it alongside the mean AUC.
+    
+    Returns
+    -------
+    None
+        The function saves plots to disk and prints summary lines.
+    
+    Notes
+    -----
+    Methods whose label contains ``'Random'`` are plotted in black to highlight the
+    baseline.
+"""
     
     for metric_name in metr_list[0][0].keys():
 
